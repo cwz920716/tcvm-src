@@ -1,0 +1,10 @@
+Nov 2nd:
+1. Replicate a TCP invariant called "TCP Dummy" for VERY simple congestion control
+2. Set "TCP Dummy" to default tcp for linux, validated in kvm
+3. Write a simple TCP monitor which will print a msg when cong_avoidance function is called, validated in kvm
+
+Nov 14th:
+1. micro benchmark program (single client, single server) done
+2. Zero-window = 7KBps
+
+
