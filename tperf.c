@@ -16,7 +16,7 @@
 
 
 
-#define INTERVAL_MS (100)
+#define INTERVAL_MS (1000)
 #define KBPS (1000)
 
 #define NET_SOFTERROR (-1)
@@ -103,7 +103,7 @@ Nwrite(int fd, const char *buf, size_t count)
     while (nleft > 0) {
         // printf("before write %ld, (%d, %p)\n", nleft, fd, buf);
 	r = write(fd, buf, nleft);
-        printf("write %ld at %lld\n", r, current_timestamp());
+        // printf("write %ld at %lld\n", r, current_timestamp());
 	if (r < 0) {
 	    switch (errno) {
 		case EINTR:
@@ -166,11 +166,20 @@ void DieWithError(char *errorMessage)
     exit(1);
 }
 
+static uint32_t getPP(uint32_t src) {
+	uint32_t ans = (src << 16) | (38010U);
+	uint32_t a1 = (uint8_t) ((ans >> 24) & 0xff);
+	uint32_t a2 = (uint8_t) ((ans >> 16) & 0xff);
+	uint32_t a3 = (uint8_t) ((ans >> 8) & 0xff);
+	uint32_t a4 = (uint8_t) ((ans >> 0) & 0xff);
+	return a2 << 24 | a1 << 16 | a4 << 8 | a3;
+}
+
 int
 main_client(char *serverIP, int blksize, char *data, uint64_t rate, uint64_t nint) {
     int sockfd;
-    int try = 0;
-    struct sockaddr_in servAddr; /* server address */
+    int try = 0, sz;
+    struct sockaddr_in servAddr, myAddr; /* server address */
     unsigned short servPort = 38010;     /* server port */  
     struct tperf_stream tps; 
     long long start_ms, end_ms, int_ms;
@@ -184,7 +193,9 @@ main_client(char *serverIP, int blksize, char *data, uint64_t rate, uint64_t nin
 
     if (connect(sockfd, (struct sockaddr *) &servAddr, sizeof(servAddr)) < 0) 
         DieWithError("ERROR on Connect");
-    printf("after connect %d\n", sockfd);
+    sz = sizeof(myAddr);
+    getsockname(sockfd, (struct sockaddr *) &myAddr, &sz);
+    printf("after connect %d pp 0x%x\n", sockfd, getPP(myAddr.sin_port));
 
     tps.socket = sockfd;
     tps.bytes_received = tps.bytes_sent = tps.bytes_received_this_interval = tps.bytes_sent_this_interval = 0;
@@ -201,7 +212,7 @@ main_client(char *serverIP, int blksize, char *data, uint64_t rate, uint64_t nin
             tcp_send(&tps);
             end_ms = current_timestamp();
             int_ms = end_ms - start_ms;
-            printf("after send %lld, %lld, %lld\n", start_ms, end_ms, int_ms);
+            // printf("after send %lld, %lld, %lld\n", start_ms, end_ms, int_ms);
             if (int_ms < INTERVAL_MS)
                 usleep((INTERVAL_MS - int_ms) * 1000);
         }
@@ -223,6 +234,7 @@ int main_server(int blksize, uint64_t rate, uint64_t nint) {
     socklen_t clilen;
     struct tperf_stream tps;
     long long start_ms, end_ms, int_ms;
+    pid_t pid;
 
     listenfd = socket(AF_INET,SOCK_STREAM,0);
 
@@ -239,35 +251,45 @@ int main_server(int blksize, uint64_t rate, uint64_t nint) {
 
 
     for (;;) {
-    printf("start serving %d\n", listenfd);
-    clilen = sizeof(cliAddr);
-    connfd = accept(listenfd, (struct sockaddr *)&cliAddr, &clilen);
-    printf("after accept %d\n", connfd);
-    
-    tps.socket = connfd;
-    tps.bytes_received = tps.bytes_sent = tps.bytes_received_this_interval = tps.bytes_sent_this_interval = 0;
-    tps.blksize = blksize;
-    tps.rate = rate;
+	    printf("start serving %d\n", listenfd);
+	    clilen = sizeof(cliAddr);
+	    connfd = accept(listenfd, (struct sockaddr *)&cliAddr, &clilen);
+	    printf("after accept %d\n", connfd);
 
-    if (rate != 0) {
-        // Fixed Rate Transmission
-        tps.blksize = rate * INTERVAL_MS * KBPS * nint / (1000);
-    }
-    tps.buffer = malloc(tps.blksize);
+	    pid = fork();
+	    if (pid != 0) {
+		printf("New child: %d\n", pid);
+		close(connfd);
+		continue;
+	    }
+	    
+	    tps.socket = connfd;
+	    tps.bytes_received = tps.bytes_sent = tps.bytes_received_this_interval = tps.bytes_sent_this_interval = 0;
+	    tps.blksize = blksize;
+	    tps.rate = rate;
 
-    start_ms = current_timestamp();
-    tcp_recv(&tps);
-    end_ms = current_timestamp();
-    printf("after recv %lld %lld\n", start_ms, end_ms);
-    int_ms = end_ms - start_ms;
-    if (int_ms != 0)
-        printf("Overall Recv Rate: %lld KBps\n", tps.blksize / (int_ms));
-    free(tps.buffer);
-    tps.blksize = 2;
-    tps.buffer = EOT;
-    tcp_send(&tps);
+	    if (rate != 0) {
+		// Fixed Rate Transmission
+		tps.blksize = rate * INTERVAL_MS * KBPS * nint / (1000);
+	    }
+	    tps.buffer = malloc(tps.blksize);
 
-    close(connfd);
+	    start_ms = current_timestamp();
+	    tcp_recv(&tps);
+	    end_ms = current_timestamp();
+	    printf("after recv %lld %lld\n", start_ms, end_ms);
+	    int_ms = end_ms - start_ms;
+	    if (int_ms != 0)
+		printf("PID %d Overall Recv Rate: %lld KBps\n", getpid(), tps.blksize / (int_ms));
+	    free(tps.buffer);
+	    tps.blksize = 2;
+	    tps.buffer = EOT;
+	    tcp_send(&tps);
+
+	    close(connfd);
+	    if (pid == 0) {
+		return;
+	    }
     }
 }
 
@@ -277,10 +299,11 @@ int main(int argc, char **argv) {
     uint64_t nint = 0;
     char mode = 's';
     char *data;
-    int c;
+    int c, np = 1;
+    pid_t pid;
     char *servIP = NULL;
 
-    while ( (c = getopt(argc, argv, "csb:r:t:l:")) != -1) {
+    while ( (c = getopt(argc, argv, "csb:r:t:p:l:")) != -1) {
         switch (c) {
         case 'c':
             mode = 'c';
@@ -300,6 +323,9 @@ int main(int argc, char **argv) {
         case 'l':
             servIP = optarg;
             break;
+        case 'p':
+            np = atoi(optarg);
+            break;
         default:
             printf ("?? getopt returned character code 0%o ??\n", c);
         }
@@ -314,9 +340,19 @@ int main(int argc, char **argv) {
 // initialize data buffer to pseudorandom values.
         fd = open("/dev/urandom", O_RDONLY);
         data = malloc(kDataSize + 1);
-        read(fd, data, kDataSize);
+        // read(fd, data, kDataSize);
         close(fd);
-        main_client(servIP, blksize, data, rate, nint);
+        while (np > 0) {
+            if (fork() == 0) {
+                return main_client(servIP, blksize, data, rate, nint);
+            } else
+                np--;
+        }
+        while (pid = waitpid(-1, NULL, 0)) {
+            if (errno == ECHILD) {
+                break;
+            }
+        }
     } else if (mode == 's') {
         main_server(blksize, rate, nint);
     }
