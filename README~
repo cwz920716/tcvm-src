@@ -2,4 +2,4 @@ Compile Instruction:
 1. Copy all files un './linux-net-ipv4' to $LINUX_SRC/net/ipv4/, Override all file
 2. Recompile and link the kernel
 3. utest.c and tperf.c are normal application, just compile with gcc and run it
-4. You may need to mount debug file system and root access to run utest.c
+4. You may need to mount debug file system and 
